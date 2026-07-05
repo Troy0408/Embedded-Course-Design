@@ -16,7 +16,7 @@ The current FreeRTOS firmware already displays the watch UI, reads MPU data, han
   - STM32 PA3 RX <- HC-05 TXD
   - STM32 PB0 <- HC-05 STATE
   - Power and ground as already connected.
-- UART configuration remains 38400 baud, 8 data bits, no parity, 1 stop bit.
+- UART configuration uses 9600 baud, 8 data bits, no parity, 1 stop bit.
 
 ## Scope
 
