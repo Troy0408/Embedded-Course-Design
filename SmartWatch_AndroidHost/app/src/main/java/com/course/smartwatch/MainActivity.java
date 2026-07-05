@@ -64,10 +64,13 @@ public final class MainActivity extends Activity implements BluetoothSppClient.L
     private String connectionState = "Disconnected";
     private boolean hasWatchConnectionFlag;
     private boolean watchConnectionFlag;
+    private boolean bluetoothConnectRequestInFlight;
+    private boolean destroyed;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        destroyed = false;
 
         buildUi();
         bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
@@ -79,18 +82,18 @@ public final class MainActivity extends Activity implements BluetoothSppClient.L
         }
 
         client = new BluetoothSppClient(bluetoothAdapter, this);
-        setConnectionState("Disconnected", false);
-        if (hasBluetoothConnectPermission()) {
-            loadBondedDevices();
-        } else {
-            setDeviceMessage("Bluetooth permission required");
-            requestBluetoothConnectPermission();
-        }
-        updateControls();
+        refreshBluetoothState(true);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refreshBluetoothState(true);
     }
 
     @Override
     protected void onDestroy() {
+        destroyed = true;
         if (client != null) {
             client.shutdown();
             client = null;
@@ -104,10 +107,14 @@ public final class MainActivity extends Activity implements BluetoothSppClient.L
         if (requestCode != REQUEST_BLUETOOTH_CONNECT) {
             return;
         }
+        bluetoothConnectRequestInFlight = false;
+        if (destroyed) {
+            return;
+        }
 
         if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
             setEvent("Bluetooth permission granted");
-            loadBondedDevices();
+            refreshBluetoothState(false);
         } else {
             setDeviceMessage("Bluetooth permission denied");
             setConnectionState("Bluetooth permission denied", false);
@@ -118,11 +125,21 @@ public final class MainActivity extends Activity implements BluetoothSppClient.L
 
     @Override
     public void onState(String text, boolean isConnected) {
+        if (destroyed) {
+            return;
+        }
+        if (!isConnected && !"Connecting".equals(text) && !isBluetoothUsable()) {
+            refreshBluetoothState(false);
+            return;
+        }
         setConnectionState(text, isConnected);
     }
 
     @Override
     public void onFrame(BtProtocol.Frame frame) {
+        if (destroyed) {
+            return;
+        }
         if (frame == null) {
             return;
         }
@@ -132,6 +149,8 @@ public final class MainActivity extends Activity implements BluetoothSppClient.L
                 updateStatus(BtProtocol.parseStatus(frame));
             } else if (frame.cmd == BtProtocol.CMD_SENSOR_DATA) {
                 updateSensor(BtProtocol.parseSensor(frame));
+            } else if (frame.cmd == BtProtocol.CMD_ACK) {
+                updateAck(frame);
             }
         } catch (IllegalArgumentException e) {
             setEvent("Bad Bluetooth frame: " + safeMessage(e));
@@ -140,6 +159,9 @@ public final class MainActivity extends Activity implements BluetoothSppClient.L
 
     @Override
     public void onError(String text) {
+        if (destroyed) {
+            return;
+        }
         setEvent(text);
         Toast.makeText(this, text, Toast.LENGTH_SHORT).show();
     }
@@ -338,10 +360,59 @@ public final class MainActivity extends Activity implements BluetoothSppClient.L
     }
 
     private void requestBluetoothConnectPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !bluetoothConnectRequestInFlight) {
+            bluetoothConnectRequestInFlight = true;
             requestPermissions(
                     new String[] { Manifest.permission.BLUETOOTH_CONNECT },
                     REQUEST_BLUETOOTH_CONNECT);
+        }
+    }
+
+    private void refreshBluetoothState(boolean requestPermission) {
+        if (destroyed) {
+            return;
+        }
+
+        BluetoothAdapter currentAdapter = BluetoothAdapter.getDefaultAdapter();
+        if (currentAdapter == null) {
+            disconnectIfActive();
+            bluetoothAdapter = null;
+            setDeviceMessage("Bluetooth unavailable");
+            setConnectionState("Bluetooth unavailable", false);
+            setEvent("This device has no Bluetooth adapter");
+            return;
+        }
+        if (bluetoothAdapter == null) {
+            bluetoothAdapter = currentAdapter;
+        }
+        if (client == null) {
+            client = new BluetoothSppClient(bluetoothAdapter, this);
+        }
+
+        if (!hasBluetoothConnectPermission()) {
+            disconnectIfActive();
+            setDeviceMessage("Bluetooth permission required");
+            setConnectionState("Bluetooth permission required", false);
+            setEvent("Grant Bluetooth permission to list paired devices");
+            if (requestPermission) {
+                requestBluetoothConnectPermission();
+            }
+            return;
+        }
+
+        if (!isBluetoothAdapterEnabled()) {
+            disconnectIfActive();
+            setDeviceMessage("Bluetooth disabled");
+            setConnectionState("Bluetooth disabled", false);
+            setEvent("Turn on Bluetooth to connect");
+            return;
+        }
+
+        if (!connected && !connecting) {
+            setConnectionState("Disconnected", false);
+            loadBondedDevices();
+        } else {
+            updateControls();
         }
     }
 
@@ -357,6 +428,11 @@ public final class MainActivity extends Activity implements BluetoothSppClient.L
         if (!hasBluetoothConnectPermission()) {
             setDeviceMessage("Bluetooth permission required");
             requestBluetoothConnectPermission();
+            updateControls();
+            return;
+        }
+        if (!isBluetoothAdapterEnabled()) {
+            setDeviceMessage("Bluetooth disabled");
             updateControls();
             return;
         }
@@ -417,12 +493,18 @@ public final class MainActivity extends Activity implements BluetoothSppClient.L
             requestBluetoothConnectPermission();
             return;
         }
+        if (!isBluetoothAdapterEnabled()) {
+            setConnectionState("Bluetooth disabled", false);
+            setEvent("Turn on Bluetooth to connect");
+            return;
+        }
 
         int index = deviceSpinner.getSelectedItemPosition();
         if (index < 0 || index >= devices.size()) {
             setEvent("Select a paired Bluetooth device first");
             return;
         }
+        setConnectionState("Connecting", false);
         client.connect(devices.get(index));
     }
 
@@ -469,10 +551,9 @@ public final class MainActivity extends Activity implements BluetoothSppClient.L
         if (!canSendCommand()) {
             return;
         }
-        currentPage = page;
-        updatePageText();
         client.write(BtProtocol.buildSetPageFrame(page));
-        setEvent("Page command sent: " + pageName(page));
+        client.write(BtProtocol.buildRequestStatusFrame());
+        setEvent("Page requested: " + pageName(page) + "; status requested");
     }
 
     private void resetSteps() {
@@ -480,12 +561,24 @@ public final class MainActivity extends Activity implements BluetoothSppClient.L
             return;
         }
         client.write(BtProtocol.buildResetStepsFrame());
-        setEvent("Reset steps sent");
+        client.write(BtProtocol.buildRequestStatusFrame());
+        setEvent("Reset steps sent; status requested");
     }
 
     private boolean canSendCommand() {
         if (client == null) {
             setEvent("Bluetooth unavailable");
+            return false;
+        }
+        if (!hasBluetoothConnectPermission()) {
+            setConnectionState("Bluetooth permission required", false);
+            setEvent("Bluetooth permission required");
+            requestBluetoothConnectPermission();
+            return false;
+        }
+        if (!isBluetoothAdapterEnabled()) {
+            setConnectionState("Bluetooth disabled", false);
+            setEvent("Turn on Bluetooth to use watch commands");
             return false;
         }
         if (!connected) {
@@ -544,6 +637,21 @@ public final class MainActivity extends Activity implements BluetoothSppClient.L
                 data.gz));
     }
 
+    private void updateAck(BtProtocol.Frame frame) {
+        byte[] payload = frame.payload();
+        if (payload.length == 0) {
+            setEvent("ACK received");
+            return;
+        }
+
+        int acknowledgedCmd = payload[0] & 0xFF;
+        String text = "ACK: " + commandName(acknowledgedCmd);
+        if (payload.length > 1) {
+            text += " status=" + (payload[1] & 0xFF);
+        }
+        setEvent(text);
+    }
+
     private void setConnectionState(String text, boolean isConnected) {
         connectionState = text;
         connected = isConnected;
@@ -574,12 +682,38 @@ public final class MainActivity extends Activity implements BluetoothSppClient.L
         return page + " Unknown";
     }
 
+    private String commandName(int cmd) {
+        if (cmd == BtProtocol.CMD_SENSOR_DATA) {
+            return "Sensor Data";
+        }
+        if (cmd == BtProtocol.CMD_TIME_SYNC) {
+            return "Time Sync";
+        }
+        if (cmd == BtProtocol.CMD_ACK) {
+            return "ACK";
+        }
+        if (cmd == BtProtocol.CMD_STATUS) {
+            return "Status";
+        }
+        if (cmd == BtProtocol.CMD_SET_PAGE) {
+            return "Set Page";
+        }
+        if (cmd == BtProtocol.CMD_RESET_STEPS) {
+            return "Reset Steps";
+        }
+        if (cmd == BtProtocol.CMD_REQUEST_STATUS) {
+            return "Request Status";
+        }
+        return String.format(Locale.US, "0x%02X", cmd);
+    }
+
     private void updateControls() {
         boolean hasClient = client != null;
         boolean hasPermission = hasBluetoothConnectPermission();
+        boolean adapterEnabled = hasPermission && isBluetoothAdapterEnabled();
         boolean hasDevices = !devices.isEmpty();
-        boolean canUseBluetooth = hasClient && hasPermission;
-        boolean canSend = hasClient && connected;
+        boolean canUseBluetooth = !destroyed && hasClient && hasPermission && adapterEnabled;
+        boolean canSend = canUseBluetooth && connected;
 
         if (deviceSpinner != null) {
             deviceSpinner.setEnabled(canUseBluetooth && hasDevices && !connected && !connecting);
@@ -601,8 +735,31 @@ public final class MainActivity extends Activity implements BluetoothSppClient.L
     }
 
     private void setEvent(String text) {
-        if (eventText != null) {
+        if (!destroyed && eventText != null) {
             eventText.setText("Last Event: " + text);
+        }
+    }
+
+    private boolean isBluetoothAdapterEnabled() {
+        if (bluetoothAdapter == null) {
+            return false;
+        }
+        try {
+            return bluetoothAdapter.isEnabled();
+        } catch (SecurityException e) {
+            return false;
+        }
+    }
+
+    private boolean isBluetoothUsable() {
+        return bluetoothAdapter != null
+                && hasBluetoothConnectPermission()
+                && isBluetoothAdapterEnabled();
+    }
+
+    private void disconnectIfActive() {
+        if ((connected || connecting) && client != null) {
+            client.disconnect();
         }
     }
 
