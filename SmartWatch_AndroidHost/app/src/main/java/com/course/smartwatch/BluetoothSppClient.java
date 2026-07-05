@@ -29,7 +29,9 @@ public final class BluetoothSppClient {
     private final BluetoothAdapter adapter;
     private final Listener listener;
     private final Handler mainHandler;
-    private final ExecutorService executor;
+    private final ExecutorService connectExecutor;
+    private final ExecutorService writeExecutor;
+    private final ExecutorService closeExecutor;
     private final Object socketLock = new Object();
     private final Object writeLock = new Object();
     private final AtomicInteger connectionId = new AtomicInteger();
@@ -47,12 +49,9 @@ public final class BluetoothSppClient {
         this.adapter = adapter;
         this.listener = listener;
         this.mainHandler = new Handler(Looper.getMainLooper());
-        this.executor = Executors.newSingleThreadExecutor(new ThreadFactory() {
-            @Override
-            public Thread newThread(Runnable runnable) {
-                return new Thread(runnable, "BluetoothSppClient");
-            }
-        });
+        this.connectExecutor = newSingleThreadExecutor("BluetoothSppClient-connect");
+        this.writeExecutor = newSingleThreadExecutor("BluetoothSppClient-write");
+        this.closeExecutor = newSingleThreadExecutor("BluetoothSppClient-close");
     }
 
     public Set<BluetoothDevice> getBondedDevices() {
@@ -72,9 +71,9 @@ public final class BluetoothSppClient {
         }
 
         final int id = connectionId.incrementAndGet();
-        closeCurrentSocket();
+        closeCurrentSocketAsync();
         postState("Connecting", false, id);
-        execute(new Runnable() {
+        executeConnect(new Runnable() {
             @Override
             public void run() {
                 connectOnWorker(device, id);
@@ -95,6 +94,39 @@ public final class BluetoothSppClient {
             return;
         }
 
+        executeWrite(new Runnable() {
+            @Override
+            public void run() {
+                writeOnWorker(target, data, id);
+            }
+        });
+    }
+
+    public void disconnect() {
+        int id = connectionId.incrementAndGet();
+        closeCurrentSocketAsync();
+        postState("Disconnected", false, id);
+    }
+
+    public void shutdown() {
+        int id = connectionId.incrementAndGet();
+        closeCurrentSocketAsync();
+        postState("Disconnected", false, id);
+        connectExecutor.shutdownNow();
+        writeExecutor.shutdownNow();
+        closeExecutor.shutdown();
+    }
+
+    private static ExecutorService newSingleThreadExecutor(final String threadName) {
+        return Executors.newSingleThreadExecutor(new ThreadFactory() {
+            @Override
+            public Thread newThread(Runnable runnable) {
+                return new Thread(runnable, threadName);
+            }
+        });
+    }
+
+    private void writeOnWorker(BluetoothSocket target, byte[] data, int id) {
         try {
             synchronized (writeLock) {
                 if (!isCurrentSocket(target, id)) {
@@ -111,27 +143,30 @@ public final class BluetoothSppClient {
         }
     }
 
-    public void disconnect() {
-        int id = connectionId.incrementAndGet();
-        closeCurrentSocket();
-        postState("Disconnected", false, id);
-    }
-
-    public void shutdown() {
-        int id = connectionId.incrementAndGet();
-        closeCurrentSocket();
-        postState("Disconnected", false, id);
-        executor.shutdownNow();
-    }
-
     private void connectOnWorker(BluetoothDevice device, int id) {
         BluetoothSocket newSocket = null;
         try {
-            adapter.cancelDiscovery();
+            if (!isCurrent(id)) {
+                return;
+            }
+            cancelDiscoveryIfPermitted();
+            if (!isCurrent(id)) {
+                return;
+            }
             newSocket = device.createRfcommSocketToServiceRecord(SPP_UUID);
+            if (!isCurrent(id)) {
+                closeQuietly(newSocket);
+                return;
+            }
             setCurrentSocket(newSocket, false);
+            if (!isCurrent(id)) {
+                clearCurrentSocket(newSocket);
+                closeQuietly(newSocket);
+                return;
+            }
             newSocket.connect();
             if (!isCurrent(id)) {
+                clearCurrentSocket(newSocket);
                 closeQuietly(newSocket);
                 return;
             }
@@ -167,11 +202,27 @@ public final class BluetoothSppClient {
         }
     }
 
-    private void execute(Runnable runnable) {
+    private void cancelDiscoveryIfPermitted() {
         try {
-            executor.execute(runnable);
+            adapter.cancelDiscovery();
+        } catch (SecurityException ignored) {
+            // Android 12+ may require BLUETOOTH_SCAN. Bonded-device SPP can continue without it.
+        }
+    }
+
+    private void executeConnect(Runnable runnable) {
+        execute(connectExecutor, runnable, "Bluetooth client is shut down");
+    }
+
+    private void executeWrite(Runnable runnable) {
+        execute(writeExecutor, runnable, "Bluetooth client is shut down");
+    }
+
+    private void execute(ExecutorService targetExecutor, Runnable runnable, String rejectedMessage) {
+        try {
+            targetExecutor.execute(runnable);
         } catch (RejectedExecutionException e) {
-            postError("Bluetooth client is shut down");
+            postError(rejectedMessage);
         }
     }
 
@@ -206,14 +257,14 @@ public final class BluetoothSppClient {
         }
     }
 
-    private void closeCurrentSocket() {
+    private void closeCurrentSocketAsync() {
         BluetoothSocket oldSocket;
         synchronized (socketLock) {
             oldSocket = socket;
             socket = null;
             connected = false;
         }
-        closeQuietly(oldSocket);
+        closeSocketAsync(oldSocket);
     }
 
     private boolean clearCurrentSocket(BluetoothSocket expected) {
@@ -247,6 +298,27 @@ public final class BluetoothSppClient {
             socketToClose.close();
         } catch (IOException ignored) {
             // Closing during disconnect commonly interrupts a blocking connect/read.
+        }
+    }
+
+    private void closeSocketAsync(final BluetoothSocket socketToClose) {
+        if (socketToClose == null) {
+            return;
+        }
+        try {
+            closeExecutor.execute(new Runnable() {
+                @Override
+                public void run() {
+                    closeQuietly(socketToClose);
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    closeQuietly(socketToClose);
+                }
+            }, "BluetoothSppClient-close-fallback").start();
         }
     }
 
