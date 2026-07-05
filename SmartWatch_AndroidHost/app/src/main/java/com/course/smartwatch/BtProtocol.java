@@ -47,7 +47,7 @@ public final class BtProtocol {
 
     public static byte[] buildFrame(int cmd, byte[] payload) {
         byte[] data = payload == null ? new byte[0] : payload;
-        require(data.length <= 0xFF, "payload too large");
+        require(data.length <= MAX_PAYLOAD_SIZE, "payload too large");
 
         int len = data.length;
         byte[] frame = new byte[HEADER_SIZE + len + CHECKSUM_SIZE + FOOTER_SIZE];
@@ -63,9 +63,9 @@ public final class BtProtocol {
     public static WatchStatus parseStatus(Frame frame) {
         require(frame != null, "frame required");
         require(frame.cmd == CMD_STATUS, "status command expected");
-        require(frame.payload.length == 14, "status payload length expected");
+        require(frame.payloadLength() == 14, "status payload length expected");
 
-        byte[] p = frame.payload;
+        byte[] p = frame.payload();
         int steps = u16le(p, 8);
         int btFrames = u16le(p, 10);
         return new WatchStatus(
@@ -86,9 +86,9 @@ public final class BtProtocol {
     public static SensorData parseSensor(Frame frame) {
         require(frame != null, "frame required");
         require(frame.cmd == CMD_SENSOR_DATA, "sensor command expected");
-        require(frame.payload.length == 24, "sensor payload length expected");
+        require(frame.payloadLength() == 24, "sensor payload length expected");
 
-        ByteBuffer data = ByteBuffer.wrap(frame.payload).order(ByteOrder.LITTLE_ENDIAN);
+        ByteBuffer data = ByteBuffer.wrap(frame.payload()).order(ByteOrder.LITTLE_ENDIAN);
         return new SensorData(
                 data.getFloat(),
                 data.getFloat(),
@@ -126,11 +126,19 @@ public final class BtProtocol {
 
     public static final class Frame {
         public final int cmd;
-        public final byte[] payload;
+        private final byte[] payload;
 
         public Frame(int cmd, byte[] payload) {
             this.cmd = cmd & 0xFF;
             this.payload = payload == null ? new byte[0] : Arrays.copyOf(payload, payload.length);
+        }
+
+        public byte[] payload() {
+            return Arrays.copyOf(payload, payload.length);
+        }
+
+        public int payloadLength() {
+            return payload.length;
         }
     }
 
