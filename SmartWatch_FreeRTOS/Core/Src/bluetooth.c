@@ -8,6 +8,13 @@ static uint8_t rx_buf[BT_RX_BUF_SIZE];
 static uint8_t tx_buf[BT_TX_BUF_SIZE];
 static uint16_t rx_old_pos = 0;
 
+#define BT_ACK_QUEUE_SIZE 8U
+
+typedef struct {
+    uint8_t cmd;
+    uint8_t status;
+} BT_Ack_t;
+
 /* Frame parser state */
 static uint8_t frame_buf[BT_RX_BUF_SIZE];
 static uint8_t frame_idx = 0;
@@ -15,9 +22,10 @@ static uint8_t frame_expected_len = 0;
 
 static BT_ControlEvent_t pending_event;
 static volatile uint8_t pending_flags = 0;
-static volatile uint8_t pending_ack_available = 0;
-static uint8_t pending_ack_cmd = 0;
-static uint8_t pending_ack_status = 0;
+static BT_Ack_t ack_queue[BT_ACK_QUEUE_SIZE];
+static volatile uint8_t ack_head = 0;
+static volatile uint8_t ack_tail = 0;
+static volatile uint8_t ack_count = 0;
 static volatile uint8_t tx_busy = 0;
 
 static void BT_ParseByte(uint8_t byte);
@@ -78,7 +86,25 @@ void BT_RxCpltCallback(uint16_t size)
         }
     }
 
-    rx_old_pos = new_pos;
+    rx_old_pos = (new_pos == BT_RX_BUF_SIZE) ? 0U : new_pos;
+}
+
+static uint32_t BT_EnterCritical(void)
+{
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    return primask;
+}
+
+static void BT_ExitCritical(uint32_t primask)
+{
+    __set_PRIMASK(primask);
+}
+
+static uint8_t BT_NextAckIndex(uint8_t index)
+{
+    index++;
+    return (index >= BT_ACK_QUEUE_SIZE) ? 0U : index;
 }
 
 static void BT_ResetParser(void)
@@ -127,9 +153,75 @@ static uint8_t BT_SendFrame(uint8_t cmd, const uint8_t *payload, uint8_t len)
 
 static void BT_QueueAck(uint8_t acknowledged_cmd, uint8_t status)
 {
-    pending_ack_cmd = acknowledged_cmd;
-    pending_ack_status = status;
-    pending_ack_available = 1U;
+    uint32_t primask = BT_EnterCritical();
+
+    if (ack_count < BT_ACK_QUEUE_SIZE) {
+        ack_queue[ack_tail].cmd = acknowledged_cmd;
+        ack_queue[ack_tail].status = status;
+        ack_tail = BT_NextAckIndex(ack_tail);
+        ack_count++;
+    }
+
+    BT_ExitCritical(primask);
+}
+
+static uint8_t BT_PeekAck(BT_Ack_t *ack)
+{
+    uint8_t available = 0U;
+    uint32_t primask = BT_EnterCritical();
+
+    if (ack_count > 0U) {
+        *ack = ack_queue[ack_head];
+        available = 1U;
+    }
+
+    BT_ExitCritical(primask);
+    return available;
+}
+
+static void BT_PopAck(void)
+{
+    uint32_t primask = BT_EnterCritical();
+
+    if (ack_count > 0U) {
+        ack_head = BT_NextAckIndex(ack_head);
+        ack_count--;
+    }
+
+    BT_ExitCritical(primask);
+}
+
+static void BT_ProcessQueuedAck(void)
+{
+    BT_Ack_t ack;
+
+    if (BT_PeekAck(&ack) == 0U) {
+        return;
+    }
+
+    if (BT_SendAck(ack.cmd, ack.status) != 0U) {
+        BT_PopAck();
+    }
+}
+
+static uint8_t BT_IsValidTimeSyncPayload(const uint8_t *payload)
+{
+    if (payload[0] > 23U) {
+        return 0U;
+    }
+    if (payload[1] > 59U || payload[2] > 59U) {
+        return 0U;
+    }
+    if (payload[4] < 1U || payload[4] > 12U) {
+        return 0U;
+    }
+    if (payload[5] < 1U || payload[5] > 31U) {
+        return 0U;
+    }
+    if (payload[6] > 6U) {
+        return 0U;
+    }
+    return 1U;
 }
 
 static void BT_HandleFrame(uint8_t cmd, const uint8_t *payload, uint8_t len)
@@ -137,6 +229,10 @@ static void BT_HandleFrame(uint8_t cmd, const uint8_t *payload, uint8_t len)
     if (cmd == BT_CMD_TIME_SYNC) {
         if (len != 7U) {
             BT_QueueAck(cmd, BT_ACK_INVALID_LENGTH);
+            return;
+        }
+        if (BT_IsValidTimeSyncPayload(payload) == 0U) {
+            BT_QueueAck(cmd, BT_ACK_INVALID_VALUE);
             return;
         }
         pending_event.time.hour = payload[0];
@@ -243,7 +339,15 @@ static void BT_ParseByte(uint8_t byte)
                 BT_HandleFrame(cmd, &frame_buf[3], len);
             }
         }
-        BT_ResetParser();
+        if (byte == BT_STX)
+        {
+            BT_ResetParser();
+            frame_buf[frame_idx++] = byte;
+        }
+        else
+        {
+            BT_ResetParser();
+        }
     }
 }
 
@@ -301,17 +405,15 @@ uint8_t BT_SendAck(uint8_t acknowledged_cmd, uint8_t status)
 
 uint8_t BT_Process(SmartWatchData_t *data, BT_ControlEvent_t *event)
 {
-    if (pending_ack_available != 0U) {
-        if (BT_SendAck(pending_ack_cmd, pending_ack_status) != 0U) {
-            pending_ack_available = 0U;
-        }
-    }
-
-    __disable_irq();
+    uint32_t primask = BT_EnterCritical();
     uint8_t flags = pending_flags;
     BT_ControlEvent_t local_event = pending_event;
     pending_flags = 0U;
-    __enable_irq();
+    BT_ExitCritical(primask);
+
+    if ((flags & BT_EVENT_REQUEST_STATUS) == 0U) {
+        BT_ProcessQueuedAck();
+    }
 
     if (flags == 0U) {
         if (event != NULL) {
