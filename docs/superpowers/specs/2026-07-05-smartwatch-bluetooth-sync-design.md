@@ -70,7 +70,7 @@ The extended protocol keeps existing command ids and adds control/status command
 | --- | --- | --- | --- |
 | `0x01` | Watch -> Android | 6 floats, 24 bytes | MPU accel and gyro data. |
 | `0x02` | Android -> Watch | 7 bytes | Sync time: hour, minute, second, year offset from 2000, month, day, weekday. |
-| `0x03` | Both | 2 bytes | ACK: acknowledged command id and status code. |
+| `0x03` | Watch -> Android | 2 bytes | ACK: acknowledged command id and status code. |
 | `0x04` | Watch -> Android | fixed status payload | Current time, page, steps, Bluetooth frame count, IMU status, connection status. |
 | `0x10` | Android -> Watch | 1 byte | Set current page. |
 | `0x11` | Android -> Watch | 0 bytes | Reset step count. |

@@ -39,7 +39,7 @@ AA CMD LEN DATA... CHK 55
 | --- | --- | --- |
 | `0x01` | Watch -> Android | MPU sensor data |
 | `0x02` | Android -> Watch | Sync time |
-| `0x03` | Both | ACK |
+| `0x03` | Watch -> Android | ACK |
 | `0x04` | Watch -> Android | Watch status |
 | `0x10` | Android -> Watch | Set page |
 | `0x11` | Android -> Watch | Reset steps |
