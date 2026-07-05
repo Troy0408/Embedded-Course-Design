@@ -92,11 +92,11 @@ void App_FreeRTOS_Start(void)
     }
 
     BaseType_t ok = pdPASS;
-    ok &= xTaskCreate(TaskClock, "clock", 128, NULL, 4, NULL);
-    ok &= xTaskCreate(TaskInput, "input", 192, NULL, 3, NULL);
-    ok &= xTaskCreate(TaskSensor, "sensor", 256, NULL, 3, NULL);
-    ok &= xTaskCreate(TaskDisplay, "display", 384, NULL, 2, NULL);
-    ok &= xTaskCreate(TaskBluetooth, "bt", 256, NULL, 1, NULL);
+    ok = (xTaskCreate(TaskClock, "clock", 128, NULL, 4, NULL) == pdPASS) ? ok : pdFAIL;
+    ok = (xTaskCreate(TaskInput, "input", 192, NULL, 3, NULL) == pdPASS) ? ok : pdFAIL;
+    ok = (xTaskCreate(TaskSensor, "sensor", 256, NULL, 3, NULL) == pdPASS) ? ok : pdFAIL;
+    ok = (xTaskCreate(TaskDisplay, "display", 384, NULL, 2, NULL) == pdPASS) ? ok : pdFAIL;
+    ok = (xTaskCreate(TaskBluetooth, "bt", 256, NULL, 1, NULL) == pdPASS) ? ok : pdFAIL;
 
     if (ok != pdPASS) {
         Error_Handler();
@@ -321,11 +321,12 @@ static void TaskBluetooth(void *argument)
                     Data_Lock();
                     watch_data.bt_frames++;
                     Data_Unlock();
+                    last_sensor_send = now;
                     changed = 1U;
                 }
+            } else {
+                last_sensor_send = now;
             }
-
-            last_sensor_send = now;
         }
 
         if (changed != 0U) {
