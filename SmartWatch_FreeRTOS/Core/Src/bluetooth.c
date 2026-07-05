@@ -26,9 +26,22 @@ static BT_Ack_t ack_queue[BT_ACK_QUEUE_SIZE];
 static volatile uint8_t ack_head = 0;
 static volatile uint8_t ack_tail = 0;
 static volatile uint8_t ack_count = 0;
+static volatile uint32_t ack_overflow_count = 0;
 static volatile uint8_t tx_busy = 0;
 
 static void BT_ParseByte(uint8_t byte);
+
+static uint32_t BT_EnterCritical(void)
+{
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    return primask;
+}
+
+static void BT_ExitCritical(uint32_t primask)
+{
+    __set_PRIMASK(primask);
+}
 
 void BT_Init(void)
 {
@@ -53,8 +66,16 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
     }
 }
 
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART2) {
+        tx_busy = 0U;
+    }
+}
+
 void BT_RxCpltCallback(uint16_t size)
 {
+    uint32_t primask = BT_EnterCritical();
     uint16_t new_pos = size;
 
     if (new_pos > BT_RX_BUF_SIZE)
@@ -64,6 +85,7 @@ void BT_RxCpltCallback(uint16_t size)
 
     if (new_pos == rx_old_pos)
     {
+        BT_ExitCritical(primask);
         return;
     }
 
@@ -87,18 +109,7 @@ void BT_RxCpltCallback(uint16_t size)
     }
 
     rx_old_pos = (new_pos == BT_RX_BUF_SIZE) ? 0U : new_pos;
-}
-
-static uint32_t BT_EnterCritical(void)
-{
-    uint32_t primask = __get_PRIMASK();
-    __disable_irq();
-    return primask;
-}
-
-static void BT_ExitCritical(uint32_t primask)
-{
-    __set_PRIMASK(primask);
+    BT_ExitCritical(primask);
 }
 
 static uint8_t BT_NextAckIndex(uint8_t index)
@@ -155,12 +166,17 @@ static void BT_QueueAck(uint8_t acknowledged_cmd, uint8_t status)
 {
     uint32_t primask = BT_EnterCritical();
 
-    if (ack_count < BT_ACK_QUEUE_SIZE) {
-        ack_queue[ack_tail].cmd = acknowledged_cmd;
-        ack_queue[ack_tail].status = status;
-        ack_tail = BT_NextAckIndex(ack_tail);
-        ack_count++;
+    if (ack_count == BT_ACK_QUEUE_SIZE) {
+        /* Keep the newest command response; drop the oldest queued ACK when full. */
+        ack_head = BT_NextAckIndex(ack_head);
+        ack_count--;
+        ack_overflow_count++;
     }
+
+    ack_queue[ack_tail].cmd = acknowledged_cmd;
+    ack_queue[ack_tail].status = status;
+    ack_tail = BT_NextAckIndex(ack_tail);
+    ack_count++;
 
     BT_ExitCritical(primask);
 }
@@ -204,8 +220,45 @@ static void BT_ProcessQueuedAck(void)
     }
 }
 
+static uint8_t BT_IsLeapYear(uint16_t year)
+{
+    if ((year % 400U) == 0U) {
+        return 1U;
+    }
+    if ((year % 100U) == 0U) {
+        return 0U;
+    }
+    return ((year % 4U) == 0U) ? 1U : 0U;
+}
+
+static uint8_t BT_DaysInMonth(uint16_t year, uint8_t month)
+{
+    switch (month) {
+    case 1U:
+    case 3U:
+    case 5U:
+    case 7U:
+    case 8U:
+    case 10U:
+    case 12U:
+        return 31U;
+    case 4U:
+    case 6U:
+    case 9U:
+    case 11U:
+        return 30U;
+    case 2U:
+        return (BT_IsLeapYear(year) != 0U) ? 29U : 28U;
+    default:
+        return 0U;
+    }
+}
+
 static uint8_t BT_IsValidTimeSyncPayload(const uint8_t *payload)
 {
+    uint16_t year = (uint16_t)(2000U + payload[3]);
+    uint8_t days_in_month;
+
     if (payload[0] > 23U) {
         return 0U;
     }
@@ -215,7 +268,8 @@ static uint8_t BT_IsValidTimeSyncPayload(const uint8_t *payload)
     if (payload[4] < 1U || payload[4] > 12U) {
         return 0U;
     }
-    if (payload[5] < 1U || payload[5] > 31U) {
+    days_in_month = BT_DaysInMonth(year, payload[4]);
+    if (payload[5] < 1U || payload[5] > days_in_month) {
         return 0U;
     }
     if (payload[6] > 6U) {
