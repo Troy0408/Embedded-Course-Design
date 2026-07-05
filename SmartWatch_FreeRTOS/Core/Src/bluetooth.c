@@ -1,7 +1,6 @@
 #include "bluetooth.h"
 #include "usart.h"
 #include <string.h>
-#include <stdio.h>
 
 /* Ring buffer for DMA RX */
 static uint8_t rx_buf[BT_RX_BUF_SIZE];
@@ -13,6 +12,7 @@ static uint16_t rx_old_pos = 0;
 typedef struct {
     uint8_t cmd;
     uint8_t status;
+    uint32_t seq;
 } BT_Ack_t;
 
 /* Frame parser state */
@@ -26,8 +26,10 @@ static BT_Ack_t ack_queue[BT_ACK_QUEUE_SIZE];
 static volatile uint8_t ack_head = 0;
 static volatile uint8_t ack_tail = 0;
 static volatile uint8_t ack_count = 0;
+static volatile uint32_t ack_next_seq = 0;
 static volatile uint32_t ack_overflow_count = 0;
 static volatile uint8_t tx_busy = 0;
+static volatile uint8_t rx_restart_requested = 0;
 
 static void BT_ParseByte(uint8_t byte);
 
@@ -70,6 +72,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
     if (huart->Instance == USART2) {
         tx_busy = 0U;
+        rx_restart_requested = 1U;
     }
 }
 
@@ -135,15 +138,22 @@ static uint8_t BT_Checksum(uint8_t cmd, uint8_t len, const uint8_t *payload)
 
 static uint8_t BT_SendFrame(uint8_t cmd, const uint8_t *payload, uint8_t len)
 {
+    uint32_t primask;
+
     if (len > (BT_TX_BUF_SIZE - 5U)) {
         return 0U;
     }
     if (payload == NULL && len > 0U) {
         return 0U;
     }
+
+    primask = BT_EnterCritical();
     if (tx_busy != 0U || huart2.gState != HAL_UART_STATE_READY) {
+        BT_ExitCritical(primask);
         return 0U;
     }
+    tx_busy = 1U;
+    BT_ExitCritical(primask);
 
     tx_buf[0] = BT_STX;
     tx_buf[1] = cmd;
@@ -154,9 +164,10 @@ static uint8_t BT_SendFrame(uint8_t cmd, const uint8_t *payload, uint8_t len)
     tx_buf[3U + len] = BT_Checksum(cmd, len, payload == NULL ? &tx_buf[3] : payload);
     tx_buf[4U + len] = BT_ETX;
 
-    tx_busy = 1U;
     if (HAL_UART_Transmit_DMA(&huart2, tx_buf, 5U + len) != HAL_OK) {
+        primask = BT_EnterCritical();
         tx_busy = 0U;
+        BT_ExitCritical(primask);
         return 0U;
     }
     return 1U;
@@ -175,6 +186,7 @@ static void BT_QueueAck(uint8_t acknowledged_cmd, uint8_t status)
 
     ack_queue[ack_tail].cmd = acknowledged_cmd;
     ack_queue[ack_tail].status = status;
+    ack_queue[ack_tail].seq = ++ack_next_seq;
     ack_tail = BT_NextAckIndex(ack_tail);
     ack_count++;
 
@@ -195,16 +207,19 @@ static uint8_t BT_PeekAck(BT_Ack_t *ack)
     return available;
 }
 
-static void BT_PopAck(void)
+static uint8_t BT_PopAckIfHeadMatches(const BT_Ack_t *ack)
 {
+    uint8_t popped = 0U;
     uint32_t primask = BT_EnterCritical();
 
-    if (ack_count > 0U) {
+    if (ack != NULL && ack_count > 0U && ack_queue[ack_head].seq == ack->seq) {
         ack_head = BT_NextAckIndex(ack_head);
         ack_count--;
+        popped = 1U;
     }
 
     BT_ExitCritical(primask);
+    return popped;
 }
 
 static void BT_ProcessQueuedAck(void)
@@ -216,7 +231,28 @@ static void BT_ProcessQueuedAck(void)
     }
 
     if (BT_SendAck(ack.cmd, ack.status) != 0U) {
-        BT_PopAck();
+        (void)BT_PopAckIfHeadMatches(&ack);
+    }
+}
+
+static void BT_ServiceRxRestart(void)
+{
+    uint8_t restart;
+    uint32_t primask = BT_EnterCritical();
+
+    restart = rx_restart_requested;
+    rx_restart_requested = 0U;
+
+    if (restart != 0U) {
+        rx_old_pos = 0U;
+        BT_ResetParser();
+    }
+
+    BT_ExitCritical(primask);
+
+    if (restart != 0U) {
+        HAL_UARTEx_ReceiveToIdle_DMA(&huart2, rx_buf, BT_RX_BUF_SIZE);
+        __HAL_DMA_DISABLE_IT(&hdma_usart2_rx, DMA_IT_HT);
     }
 }
 
@@ -459,9 +495,15 @@ uint8_t BT_SendAck(uint8_t acknowledged_cmd, uint8_t status)
 
 uint8_t BT_Process(SmartWatchData_t *data, BT_ControlEvent_t *event)
 {
-    uint32_t primask = BT_EnterCritical();
-    uint8_t flags = pending_flags;
-    BT_ControlEvent_t local_event = pending_event;
+    uint32_t primask;
+    uint8_t flags;
+    BT_ControlEvent_t local_event;
+
+    BT_ServiceRxRestart();
+
+    primask = BT_EnterCritical();
+    flags = pending_flags;
+    local_event = pending_event;
     pending_flags = 0U;
     BT_ExitCritical(primask);
 
