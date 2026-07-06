@@ -1,0 +1,48 @@
+# Build outputs
+build/
+*/build/
+cmake-build-*/
+
+# STM32CubeIDE / ST tooling local files
+.metadata/
+.settings/
+.claude/
+mx.scratch/
+*.launch
+*.log
+
+# Android local and generated files
+local.properties
+.gradle/
+.idea/
+*.iml
+
+# Python cache and local runtime state
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.ble_last_device.json
+
+# LaTeX generated files
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+*.xdv
+
+# Local backup/reference projects not intended for final submission
+backup_unused/
+
+# OS files
+Thumbs.db
+.DS_Store
