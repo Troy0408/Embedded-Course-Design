@@ -81,9 +81,9 @@
     姓名： & 叶楚轶 \\
     学号： & 3124007715 \\
     专业： & 微电子科学与工程 \\
-    班级： & 4 \\
+    班级： & 4班 \\
     指导教师： & 周贤中 \\
-    完成日期： & \today \\
+    完成日期： & 2026 年 7 月 8 日 \\
   \end{tabular}
 
   \vfill
@@ -159,7 +159,7 @@
   \centering
   \resizebox{0.96\textwidth}{!}{%
   \begin{tikzpicture}[
-    node distance=1.05cm and 1.15cm,
+    node distance=1.05cm and 1.35cm,
     block/.style={draw, rounded corners=2pt, align=center, minimum width=2.75cm, minimum height=0.9cm},
     arrow/.style={-{Latex[length=2mm]}, thick}
   ]
@@ -168,7 +168,7 @@
     \node[block, fill=green!8, below left=of mcu] (mpu) {MPU6050\\I2C2};
     \node[block, fill=yellow!12, above right=of mcu] (input) {旋转编码器\\PB1 按键};
     \node[block, fill=orange!10, below right=of mcu] (bt) {HC-05 蓝牙\\USART2};
-    \node[block, fill=purple!8, right=1.2cm of bt] (phone) {Android 上位机\\SPP 控制};
+    \node[block, fill=purple!8, right=1.8cm of bt] (phone) {Android 上位机\\SPP 控制};
 
     \draw[arrow] (mcu) -- node[above, sloped]{显示刷新} (oled);
     \draw[arrow] (mpu) -- node[below, sloped]{传感器数据} (mcu);
@@ -413,17 +413,17 @@ Android 上位机界面和蓝牙控制演示分别如图~\ref{fig:android-studio
 
 \section{个人贡献}
 
-本人在本项目中主要完成以下工作：
+本人作为本项目的主要负责人，承担了系统方案确定、核心代码实现、联调排错和最终文档整合等主要工作。具体贡献如下：
 \begin{enumerate}[leftmargin=2em]
-  \item 根据课程要求分析智能手表功能，确定以 STM32F103C8T6、SSD1306、MPU6050、HC-05 和旋转编码器为核心的方案；
-  \item 完成实物接线、模块供电和外设引脚分配，处理 OLED、MPU6050、HC-05 与输入模块的连接问题；
-  \item 完成 FreeRTOS 多任务结构设计，将时钟、输入、传感器、显示和蓝牙拆分为独立任务；
-  \item 调试 OLED 页面、编码器翻页、PB1 返回表盘、MPU6050 数据读取和计步功能；
-  \item 完成 HC-05 与 Android 手机上位机的数据同步和远程控制功能；
-  \item 整理 README、检查报告、实物图片和课程设计实验报告。
+  \item 根据课程要求分析智能手表功能，确定以 STM32F103C8T6、SSD1306、MPU6050、HC-05 和旋转编码器为核心的总体方案，并规划基本功能与扩展功能；
+  \item 负责主要硬件接线、模块供电和外设引脚分配，处理 OLED、MPU6050、HC-05、旋转编码器与独立按键之间的连接和调试问题；
+  \item 设计并实现 FreeRTOS 多任务程序结构，将时钟维护、输入扫描、传感器采集、OLED 刷新和蓝牙通信拆分为独立任务，并使用互斥量保护共享数据；
+  \item 编写和调试 OLED 页面、编码器翻页、PB1 返回表盘、MPU6050 数据读取、姿态显示和基础计步等核心功能；
+  \item 负责 HC-05 与 Android 上位机的协议联调，实现同步时间、切换页面、清零步数、请求状态和传感器数据查看等功能；
+  \item 统筹最终演示效果，整理 README、检查报告、实物图片、课程设计报告和答辩讲解要点。
 \end{enumerate}
 
-在开发过程中，个人投入主要集中在硬件连接调试、嵌入式软件开发、蓝牙协议联调和文档整理。由于没有制作 PCB，硬件部分的重点转为保证模块接线稳定、接口说明清晰和功能演示完整。
+在开发过程中，本人投入最多的部分是系统总体设计、嵌入式核心程序开发、硬件联调、蓝牙协议联调和最终材料整合。由于本项目未制作 PCB，硬件部分重点转为保证模块接线稳定、接口说明清晰和现场演示链路完整。
 
 \section{项目成果与反思}
 

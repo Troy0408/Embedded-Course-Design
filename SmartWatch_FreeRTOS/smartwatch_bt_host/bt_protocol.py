@@ -16,6 +16,10 @@ BT_ETX = 0x55
 BT_CMD_SENSOR_DATA = 0x01
 BT_CMD_TIME_SYNC   = 0x02
 BT_CMD_ACK         = 0x03
+BT_CMD_STATUS      = 0x04
+BT_CMD_SET_PAGE    = 0x10
+BT_CMD_RESET_STEPS = 0x11
+BT_CMD_REQUEST_STATUS = 0x12
 
 BT_RX_BUF_SIZE = 256
 BT_TX_BUF_SIZE = 256
@@ -91,16 +95,22 @@ def parse_sensor_data(data: bytes) -> dict:
 
 
 def build_time_sync_cmd(hour: int, minute: int, second: int,
-                         year: int, month: int, day: int) -> bytes:
+                         year: int, month: int, day: int,
+                         weekday: int | None = None) -> bytes:
     """Build a CMD_TIME_SYNC frame to send to the watch."""
+    if weekday is None:
+        # Python is Mon=0..Sun=6; firmware uses Sun=0..Sat=6.
+        import datetime
+        weekday = (datetime.date(year, month, day).weekday() + 1) % 7
+
     data = bytearray(7)
     data[0] = hour
     data[1] = minute
     data[2] = second
-    data[3] = (year >> 8) & 0xFF
-    data[4] = year & 0xFF
-    data[5] = month
-    data[6] = day
+    data[3] = (year - 2000) & 0xFF
+    data[4] = month
+    data[5] = day
+    data[6] = weekday & 0xFF
 
     chk = BT_CMD_TIME_SYNC ^ 7
     for b in data:

@@ -51,13 +51,13 @@ configCHECK_FOR_STACK_OVERFLOW 2
 configUSE_MALLOC_FAILED_HOOK   1
 ```
 
-FreeRTOS Kernel 来源：
+FreeRTOS Kernel 已复制到本工程：
 
 ```text
-C:\Users\Troy\STM32Cube\Repository\STM32Cube_FW_F1_V1.8.7\Middlewares\Third_Party\FreeRTOS
+Middlewares/Third_Party/FreeRTOS
 ```
 
-本工程只复制并编译 FreeRTOS core、GCC ARM_CM3 port 和 `heap_4.c`。
+本工程编译 FreeRTOS core、GCC ARM_CM3 port 和 `heap_4.c`。
 
 ## 中断说明
 

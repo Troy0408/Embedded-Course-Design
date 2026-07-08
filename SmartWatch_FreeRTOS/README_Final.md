@@ -115,31 +115,21 @@ PB1: Independent button, input pull-up
 
 不要把编码器按钮接到 PB10。PB10 已经是 MPU6050 的 I2C2_SCL。
 
-## 5. 后续 FreeRTOS 迁移设置
+## 5. 当前 FreeRTOS 实现说明
 
-课程基本要求需要 FreeRTOS。建议先用当前工程完成裸机演示，再迁移 RTOS。
+当前工程已经完成 FreeRTOS 迁移。CubeMX `.ioc` 主要保存时钟、GPIO、I2C、USART2 和 DMA 等外设配置；FreeRTOS kernel、任务创建和任务调度逻辑由工程内源码与 CMake 手动集成。
 
-CubeMX 中增加：
-
-```text
-SYS Timebase Source: TIM1
-Middleware -> FreeRTOS: CMSIS_V1
-TOTAL_HEAP_SIZE: 8192
-TICK_RATE_HZ: 1000
-Memory management: heap_4
-```
-
-建议任务：
+任务划分：
 
 | 任务 | 周期 | 功能 |
 | --- | --- | --- |
-| taskTime | 1000 ms | 软件时间 |
-| taskSensor | 50 ms | MPU6050 读取和计步 |
-| taskDisplay | 100 ms | OLED 刷新 |
-| taskInput | 20 ms | 编码器和 PB1 按钮 |
-| taskBluetooth | 500 ms | 蓝牙发送 |
+| `clock` | 1000 ms | 软件时间和运行时间 |
+| `input` | 10 ms | 编码器翻页和 PB1 回表盘 |
+| `sensor` | 50 ms | MPU6050 读取、姿态计算和计步 |
+| `display` | 事件触发，最短 100 ms | OLED 页面刷新 |
+| `bt` | 50 ms 处理，500 ms 发送 | 蓝牙接收命令、发送状态和传感器数据 |
 
-迁移时保持当前引脚不变：
+当前引脚保持如下：
 
 ```text
 OLED: PB6/PB7

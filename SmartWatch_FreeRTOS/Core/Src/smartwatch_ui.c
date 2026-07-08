@@ -78,7 +78,7 @@ void UI_DrawStatusBar(SmartWatchData_t *data) {
         OLED_Buffer[i] = 0x00;
 
     /* Battery icon (left side, x=0-14) */
-    for (uint8_t x = 0; x < 14; x++) {
+    for (uint8_t x = 0; x < 15; x++) {
         if (x == 0 || x == 13)
             OLED_Buffer[x] = 0x7E;
         else if (x == 14)
